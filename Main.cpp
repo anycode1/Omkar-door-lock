@@ -1,11 +1,13 @@
+//Libraries
 #include <Keypad.h>
 #include <Servo.h>
 #include <Adafruit_Fingerprint.h>
 #include <MFRC522.h>
 #include <SPI.h>
 #include <SoftwareSerial.h>
+#include <EEPROM.h>
 
-// ----- Pins -----
+//Pins (change as needed)
 #define BUZZER_PIN 10
 #define SERVO_PIN 11
 #define FINGER_RX 12
@@ -13,11 +15,11 @@
 #define RFID_SS 5
 #define RFID_RST 6
 
-// ----- Password -----
+//Password (change as needed)
 const String correctPassword = "1234";
 String inputPassword = "";
 
-// ----- Keypad Setup -----
+//Keypad
 const byte ROWS = 4;
 const byte COLS = 4;
 char keys[ROWS][COLS] = {
@@ -30,17 +32,17 @@ byte rowPins[ROWS] = {9, 8, 7, 6};
 byte colPins[COLS] = {5, 4, 3, 2};
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-// ----- Servo -----
+//Servo
 Servo lockServo;
 
-// ----- Fingerprint Sensor -----
+//Fingerprint Sensor
 SoftwareSerial fingerSerial(FINGER_RX, FINGER_TX);
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&fingerSerial);
 
-// ----- RFID -----
+//RFID
 MFRC522 rfid(RFID_SS, RFID_RST);
 
-// ----- States -----
+//States
 bool passwordAccepted = false;
 bool fingerprintAccepted = false;
 bool rfidAccepted = false;
@@ -78,7 +80,7 @@ void loop() {
 
   if (passwordAccepted && fingerprintAccepted && rfidAccepted) {
     unlockDoor();
-    delay(5000); // Wait 5 seconds before locking again
+    delay(10000); // Wait 10 seconds before locking again
     lockDoor();
     resetAuth();
   }
@@ -132,8 +134,7 @@ void checkRFID() {
     }
     Serial.println();
 
-    // Simple UID check example
-    if (rfid.uid.uidByte[0] == 0xDE && rfid.uid.uidByte[1] == 0xAD) {
+    if (checkRFID_UID(rfid.uid.uidByte, rfid.uid.size)) {
       rfidAccepted = true;
       Serial.println("RFID accepted.");
     } else {
@@ -158,4 +159,47 @@ void resetAuth() {
   passwordAccepted = false;
   fingerprintAccepted = false;
   rfidAccepted = false;
+}
+
+void saveRFIDToEEPROM(byte slot, byte *uid, byte uidSize) {
+  int addr = slot * 5; // 5 bytes per UID slot
+  EEPROM.write(addr, uidSize);
+  for (byte i = 0; i < uidSize; i++) {
+    EEPROM.write(addr + 1 + i, uid[i]);
+  }
+}
+
+bool checkRFID_UID(byte *uid, byte uidSize) {
+  for (int slot = 0; slot < 10; slot++) {
+    int addr = slot * 5;
+    byte storedSize = EEPROM.read(addr);
+    if (storedSize != uidSize) continue;
+
+    bool match = true;
+    for (byte i = 0; i < uidSize; i++) {
+      if (EEPROM.read(addr + 1 + i) != uid[i]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return true;
+  }
+  return false;
+}
+
+void checkSerialForNewCard() {
+  if (Serial.available()) {
+    if (Serial.read() == 'E') {
+      Serial.println("Scan RFID card to enroll...");
+
+      while (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial());
+      byte newUID[10];
+      byte size = rfid.uid.size;
+      memcpy(newUID, rfid.uid.uidByte, size);
+
+      saveRFIDToEEPROM(0, newUID, size); // Store in slot 0 for now
+      Serial.println("RFID card saved!");
+      rfid.PICC_HaltA();
+    }
+  }
 }
